@@ -1,0 +1,127 @@
+import urllib, sys
+from myhttp.http_server import HTTPServer, BaseHTTPRequestHandler
+from mywsgiref.handlers import SimpleHandler
+
+__version__ = '0.1'
+__all__ = ['WSGIServer', 'WSGIRequestHandler', 'demo_app']  
+
+server_version = "WSGIServer/" + __version__
+sys_version = "Python/" + sys.version.split()[0]
+software_version = server_version + ' ' + sys_version
+
+class ServerHandler(SimpleHandler):
+    server_software = software_version
+
+    def close(self):
+        try:
+            self.request_handler.log_request(
+                self.status.split(' ',1)[0], self.bytes_sent
+            )
+        finally:
+            SimpleHandler.close(self)
+
+class WSGIServer(HTTPServer):
+    """BaseHTTPServer implementation for WSGI."""
+
+    application = None
+
+    def server_bind(self):
+        """Override server_bind to store the server name."""
+        HTTPServer.server_bind(self)
+        self.setup_environ()
+
+    def setup_environ(self):
+        """Set up base environment for WSGI."""
+        env = self.base_environ = {}
+        env['SERVER_NAME'] = self.server_name
+        env['GATEWAY_INTERFACE'] = 'CGI/1.1'
+        env['SERVER_PORT'] = str(self.server_port)
+        env['REMOTE_HOST']=''
+        env['CONTENT_LENGTH']=''
+        env['SCRIPT_NAME']=''
+
+    def get_app(self):
+        return self.application
+    
+    def set_app(self, application):
+        self.application = application
+    
+
+class WSGIRequestHandler(BaseHTTPRequestHandler):
+    server_version = "WSGIServer/" + __version__
+
+    def get_envion(self):
+        env = self.server.base_environ.copy()
+        env['SERVER_PROTOCOL'] = self.request_version
+        env['REQUEST_METHOD'] = self.command
+        if '?' in self.path:
+            path, query = self.path.split('?', 1)
+        else:
+            path, query = self.path, ''
+
+        env['PATH_INFO'] = urllib.parse.unquote(path)
+        env['QUERY_STRING'] = query
+        
+        # if host not equal client_address[0], then set REMOTE_HOST/REMOTE_ADDR
+        host = self.address_string()
+        if host != self.client_address[0]:
+            env['REMOTE_HOST'] = host
+        env['REMOTE_ADDR'] = self.client_address[0]
+
+        content_type = self.headers.get('Content-Type')
+        if content_type:
+            env['CONTENT_TYPE'] = content_type
+
+        length = self.headers.get('Content-Length')
+        if length:
+            env['CONTENT_LENGTH'] = length
+
+        for k, v in self.headers.items():
+            k=k.replace('-', '_').upper()
+            v = v.strip()
+            if k in env: continue # skip content length, type, etc.
+            if 'HTTP_'+k in env:
+                env['HTTP_'+k] += ','+v
+            else:
+                env['HTTP_'+k] = v
+        return env
+    
+    def get_stderr(self):
+        return sys.stderr
+    
+    def handle(self):
+        """Handle a single HTTP request."""
+        self.raw_requestline = self.rfile.readline()
+        if not self.parse_request(): return
+
+        handler = ServerHandler(
+            self.rfile, self.wfile, self.get_stderr(), self.get_envion()
+        )
+
+        handler.request_handler = self
+        handler.run(self.server.get_app())
+        
+
+
+
+def demo_app(environ, start_response):
+    from io import StringIO
+    stdout = StringIO()
+    print("Hello world", file=stdout)
+    print(file=stdout)
+    h = environ.items()
+    h.sort()
+    for k,v in h:
+        print(k, '=', repr(v), file=stdout)
+    start_response("200 OK", [('Content-Type', 'text/plain')])
+    return  [stdout.getvalue()]
+
+def make_server(
+    host, port, app, server_class=WSGIServer, handler_class=WSGIRequestHandler
+):
+    """Create a new WSGIServer instance for app."""
+    server = server_class((host, port), handler_class)
+    server.set_app(app)
+    return server
+
+    
