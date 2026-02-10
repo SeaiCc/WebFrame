@@ -1,3 +1,4 @@
+import email.utils
 import itertools
 import socket
 import sys
@@ -6,6 +7,8 @@ import time
 from mysocket import mysocketserver
 from myhttp import HTTPStatus
 import myhttp.http_client
+
+__version__ = "0.6"
 
 class HTTPServer(mysocketserver.TCPServer):
     
@@ -19,6 +22,10 @@ class HTTPServer(mysocketserver.TCPServer):
         self.server_port = port
 
 class BaseHTTPRequestHandler(mysocketserver.StreamRequestHandler):
+
+    sys_version = "Python/" + sys.version.split()[0]
+
+    server_version = "BaseHTTP/" + __version__
 
     # Response dict, code: (phrase, desc) 
     responses = {
@@ -46,7 +53,22 @@ class BaseHTTPRequestHandler(mysocketserver.StreamRequestHandler):
                 self.request_version = ''
                 self.send_error(HTTPStatus.REQUEST_URI_TOO_LONG)
                 return
-        
+            if not self.raw_requestline:
+                self.close_connection = True
+                return 
+            if not self.parse_request():
+                # 可发送错误码， 这里只退出
+                return
+            mname = 'do_' + self.command
+            if not hasattr(self, mname):
+                self.send_error(
+                    HTTPStatus.NOT_IMPLEMENTED,
+                    "Unsupported method (%r)" % self.command
+                )
+                return
+            method = getattr(self, mname)
+            method()
+            self.wfile.flush() # 若还没有发送response，立即发送
         except TimeoutError as e:
             # a read or a write timed out. Discard this connection
             self.log_error("Request timed out: %r", e)
@@ -54,7 +76,7 @@ class BaseHTTPRequestHandler(mysocketserver.StreamRequestHandler):
             return
 
     def handle(self):
-        """Handle multiple requests if necessary."""
+        """如果需要处理多个请求"""
         self.close_connection = True
 
         self.handle_one_request()
@@ -165,6 +187,16 @@ class BaseHTTPRequestHandler(mysocketserver.StreamRequestHandler):
         self.end_headers()
         return True
     
+    def send_response(self, code, message=None):
+        """将response的header添加至headers buffer 并打印response code
+
+        也会发送两个两个标准头，分别包含软件版本和当前日期
+        """
+        self.log_request(code)
+        self.send_response_only(code, message)
+        self.send_header("Server", self.version_string())
+        self.send_header("Date", self.date_time_string())
+
     def send_response_only(self, code, message=None):
         """Send the response header only."""
         if self.request_version != 'HTTP/0.9':
@@ -178,6 +210,20 @@ class BaseHTTPRequestHandler(mysocketserver.StreamRequestHandler):
             self._headers_buffer.append(("%s %d %s\r\n" %
                     (self.protocol_version, code, message)).encode(
                         'latin-1', 'strict'))
+
+    def send_header(self, keyword, value):
+        """发送一个MIME头到headers buffer"""
+        if self.request_version != 'HTTP/0.9':
+            if not hasattr(self, '_headers_buffer'):
+                self._headers_buffer = []
+            self._headers_buffer.append(
+                ("%s: %s\r\n" % (keyword, value)).encode('latin-1', 'strict')
+            )
+        if keyword.lower() == 'connection':
+            if value.lower() == 'close':
+                self.close_connection = True
+            elif value.lower() == 'keep-alive':
+                self.close_connection = False
 
     def end_headers(self):
         """Send the blank line ending the MIME headers."""
@@ -260,6 +306,16 @@ class BaseHTTPRequestHandler(mysocketserver.StreamRequestHandler):
                         (self.address_string(),
                          self.log_date_time_string(),
                          message.translate(self._control_char_table)))
+
+    def version_string(self):
+        """返回服务器版本字符串"""
+        return self.server_version + ' ' + self.sys_version
+    
+    def date_time_string(self, timestamp=None):
+        """返回以邮件头显示的当前日期和时间"""
+        if timestamp is None:
+            timestamp = time.time()
+        return email.utils.formatdate(timestamp, usegmt=True)
 
     def address_string(self):
         """Return the clinet address."""

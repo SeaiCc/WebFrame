@@ -1,11 +1,18 @@
-import threading
+import os
 import socket
 import selectors
 import sys
+import threading
 from io import BufferedIOBase
 
-# poll/select have the advantage of not requiring any extra file descriptor,
-# contrarily to epoll/kqueue (also, they require a single syscall).
+__all__ = ["TCPServer",
+           "StreamRequestHandler",
+           "ThreadingMixIn",]
+if hasattr(os, "fork"):
+    __all__.extend(["ForkingMixIn",])
+
+# 与 epoll/kqueue 不同，poll/select 有不需要任何额外文件描述符的优点，
+# 此外他们只需要一次系统调用
 if hasattr(selectors, 'PollSelector'):
     _ServerSelector = selectors.PollSelector
 else:
@@ -163,6 +170,33 @@ class TCPServer:
     def __exit__(self, *args):
         self.server_close()
 
+if hasattr(os, "fork"):
+    class ForkingMixIn:
+        """在一个新线程中处理每个请求的Mix-in类"""
+        timeout = 300
+        active_children = None
+        max_children = 40
+        # 若为True，server_close()会等待所有子进程结束
+        block_on_close = True
+
+class _NoThreads:
+    """_Threads的退化版本"""
+    def append(self, thread):
+        pass
+
+    def join(self):
+        pass
+
+class ThreadingMixIn:
+    """在一个新线程处理每个请求的Mix-in类"""
+
+    # 决定主线程终止时线程的行为
+    daemon_threads = False
+    # 若为真，server_close()会等待所有非守护进程终止
+    block_on_close = True
+    # 线程对象
+    # 用于server_close()等待所有线程完成
+    _threads = _NoThreads()
 
 class StreamRequestHandler:
 

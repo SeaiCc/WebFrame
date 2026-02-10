@@ -25,6 +25,8 @@ class HTTPStatus(IntEnum):
         'fields are too large')
     
     # server errors
+    NOT_IMPLEMENTED = (501, 'Not Implemented',
+        'Server does not support this operation')
     HTTP_VERSION_NOT_SUPPORTED = (505, 'HTTP Version Not Supported',
         'Cannot fulfill request')
     
