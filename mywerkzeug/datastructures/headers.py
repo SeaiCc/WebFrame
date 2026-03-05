@@ -13,6 +13,8 @@ from .. import http # noqa: E402
 if t.TYPE_CHECKING:
     from _typeshed.wsgi import WSGIEnvironment
 
+T = t.TypeVar("T")
+
 class Headers:
     """An object that stores some headers. It has a dict-like interface,
     but is ordered, can store the same key multiple times, and iterating
@@ -112,6 +114,48 @@ class Headers:
         value_str = _str_header_value(value)
         self._list.append((key, value_str))
 
+    @t.overload
+    def get(self, key: str) -> str | None: ...
+    @t.overload
+    def get(self, key: str, default: str) -> str: ...
+    @t.overload
+    def get(self, key: str, default: T) -> str | T: ...
+    @t.overload
+    def get(self, key: str, type: cabc.Callable[[str], T]) -> T | None: ...
+    @t.overload
+    def get(self, key: str, default: T, type: cabc.Callable[[str], T]) -> T: ...
+    def get( # type: ignore[misc]
+        self,
+        key: str,
+        default: str | T | None = None,
+        type: cabc.Callable[[str], T] | None = None,
+    ) -> str | T | None:
+        """如果请求数据不存在返回默认值，如果`type`提供了并且可调用,应该对这个值进行转换，
+        然后返回，或者无法转换，抛出一个:exc:`ValueError`. 这种情况下，function会返回
+        默认值，就像这个值没有找到一样：
+
+        >>> d = Headers(['Content-Length', '42'])
+        >>> d.get('Content-Lenght', type=int)
+        42
+
+        :param key: 要寻找的key
+        :param default: 如果key没有找到，应该返回的默认值，如果没有指定，返回`None`
+        :param type: 在:class:`Headers`中用于转换value的可调用对象，如果callable抛出
+            :exc:`ValueError`,返回默认值
+        """
+        try:
+            rv = self._get_key(key)
+        except KeyError:
+            return default
+        
+        if type is None:
+            return rv
+        
+        try:
+            return type(rv)
+        except ValueError:
+            return default
+
     def _get_key(self, key: str) -> str:
         ikey = key.lower()
 
@@ -119,6 +163,53 @@ class Headers:
             if k.lower() == ikey:
                 return v
         raise BadRequestKeyError(key)
+
+    @t.overload
+    def getlist(self, key: str) -> list[str]: ...
+    @t.overload
+    def getlist(self, key: str, type: cabc.Callable[[str], T]) -> list[T]: ...
+    def getlist(
+        self, key: str, type: cabc.Callable[[str], T] | None = None
+    ) -> list[str] | list[T]:
+        """根据给定的key返回items的列表，如果key不在:class:`Headers`, 返回空list
+        类似:meth:`get`, :meth:`getlist`接收一个`type`参数,所有的items将使用定义的
+        可调用对象进行转换
+        
+        :param key: 需要查询的key
+        :param type: 用来转换:class:`Headers`中值的可调用对象.如果callable抛出
+            :exec:`ValueError`值会从list移除
+        """
+        ikey = key.lower()
+
+        if type is not None:
+            result = []
+
+            for k, v in self:
+                if k.lower() == ikey:
+                    try:
+                        result.append(type(v))
+                    except ValueError:
+                        continue
+            
+            return result
+        
+        return [v for k, v in self if k.lower() == ikey]
+
+    def _del_key(self, key: str) -> None:
+        key = key.lower()
+        new = []
+
+        for k, v in self._list:
+            if k.lower() != key:
+                new.append((k, v))
+
+        self._list[:] = new
+
+    def remove(self, key: str) -> None:
+        """移除key
+        :param key: 需要移除的key
+        """
+        return self._del_key(key)
 
     def __contains__(self, key: str) -> bool:
         """Check if a key is present."""
@@ -171,6 +262,21 @@ class Headers:
         # remove remaining occurences
         self._list[idx + 1 :] = [t for t in iter_list if t[0].lower() != ikey]
 
+    def setlist(self, key: str, values: cabc.Iterable[t.Any]) -> None:
+        """移除存在的值并添加一个新的
+        
+        :param key: 需要设置的header key
+        :param value: 给key设置的可迭代的value
+        """
+        if values:
+            values_iter = iter(values)
+            self.set(key, next(values_iter))
+
+            for value in values_iter:
+                self.add(key, value)
+        else:
+            self.remove(key)
+
     @t.overload
     def __setitem__(self, key: str, vluae: t.Any) -> None: ...
     @t.overload
@@ -191,6 +297,47 @@ class Headers:
             self._list[key] = value[0], _str_header_value(value[1]) # type: ignore[index]
         else:
             self._list[key] = [(k, _str_header_value(v)) for k, v in value] # type: ignore[misc]
+
+    def update(
+        self,
+        arg: (
+            Headers
+            | MultiDict[str, t.Any]
+            | cabc.Mapping[
+                str, t.Any | list[t.Any] | tuple[t.Any, ...] | cabc.Set[t.Any]
+            ]
+            | cabc.Iterable[tuple[str, t.Any]]
+            | None
+        ) = None,
+        /,
+        **kwargs: t.Any | list[t.Any] | tuple[t.Any, ...] | cabc.Set[t.Any],
+    ) -> None:
+        """使用另一个header对象中的items替换此对象中的headers
+        
+        为了扩展当前keys而不是替换，使用:meth:`extend`
+
+        如果提供，第一个参数可以是另外一个:class:`Headers`对象，一个:class:`MultiDict`
+        :class:`dict` 或者可迭代对
+        """
+        if arg is not None:
+            if isinstance(arg, (Headers, MultiDict)):
+                for key in arg.keys():
+                    self.setlist(key, arg.getlist(key))
+            elif isinstance(arg, cabc.Mapping):
+                for key, value in arg.items():
+                    if isinstance(value, (list, tuple, set)):
+                        self.setlist(key, value)
+                    else:
+                        self.set(key, value)
+            else:
+                for key, value in arg:
+                    self.set(key, value)
+        
+        for key, value in kwargs.items():
+            if isinstance(value, (list, tuple, set)):
+                self.setlist(key, value)
+            else:
+                self.set(key, value)        
 
     def to_wsgi_list(self) -> list[tuple[str, str]]:
         """将headers转换为合适的WSGI格式"""

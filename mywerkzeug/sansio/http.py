@@ -1,3 +1,5 @@
+import re
+import typing as t
 from datetime import datetime
 
 from .._internal import _dt_as_utc
@@ -79,9 +81,65 @@ def is_resource_modified(
     
     return not unmodified
 
-                
+_cookie_re = re.compile(
+    r"""
+    ([^=;]*)
+    (?:\s*=\s*
+      (
+        "(?:[^\\"]|\\.)*"
+      |
+        .*?
+      )
+    )?
+    \s*;\s*
+    """,
+    flags=re.ASCII | re.VERBOSE,
+)
+_cookie_unslash_re = re.compile(rb"\\([0-3][0-7]{2}|.)")
+
+def _cookie_unslash_replace(m: t.Match[bytes]) -> bytes:
+    v = m.group(1)
+
+    if len(v) == 1: return v
+
+    return int(v, 8).to_bytes(1, "big")
+
+def parse_cookie(
+    cookie: str | None = None,
+    cls: type[ds.MultiDict[str, str]] | None = None,
+) -> ds.MultiDict[str, str]:
+    """从string中解析一个cookie
+    
+    相同的key可以多次提供，值会按序存储。默认:class:`MultiDict`会先有第一个值, 值可以
+    使用:meth:`MultiDict.getlist`检索
+
+    :param cookie: cookie header字符串
+    :param cls: 用于存储解析cookies的类字典类，默认为:class:`MultiDict`
+    """
+    if cls is None:
+        cls = t.cast("type[ds.MultiDict[str, str]]", ds.MultiDict)
+
+    if not cookie: return cls()
+
+    cookie = f"{cookie};"
+    out = []
+
+    for ck, cv in _cookie_re.findall(cookie):
+        ck = ck.strip()
+        cv = cv.strip()
+
+        if not ck: continue
+
+        if len(cv) >= 2 and cv[0] == cv[-1] == '"':
+            # bytes也可以，因为UTF-8字符可以是多个bytes
+            cv = _cookie_unslash_re.sub(
+                _cookie_unslash_replace, cv[1:-1].encode()
+            ).decode()        
         
-        
+        out.append((ck, cv))
+    
+    return cls(out)
 
 
-
+# circular dependencies
+from .. import datastructures as ds # noqa: E402

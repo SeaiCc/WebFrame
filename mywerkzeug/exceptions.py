@@ -137,6 +137,24 @@ class SecurityError(BadRequest):
     This class just for differ with a bad request error.
     """
 
+class BadHost(BadRequest):
+    """如果提交了一个错误格式的host会抛出此异常"""
+
+class NotFound(HTTPException):
+    """*404* `Not Found`
+    
+    如果资源不存在抛出
+    """
+
+    code = 404
+    description = (
+        "The requested URL was not found on the server. If you entered"
+        " the URL manually please check your spelling and try again."
+    )
+
+class MethodNotAllowed(HTTPException):
+    pass
+
 class InternalServerError(HTTPException):
     """*500* 服务器内部错误
     
@@ -159,3 +177,34 @@ class InternalServerError(HTTPException):
         self.original_exception = original_exception
         super().__init__(description=description, response=response)
         
+default_exceptions: dict[int, type[HTTPException]] = {}
+
+class Aborter:
+    """当传递code -> exception的字典时，可以作为callable来抛出异常。如果callable的
+    第一个参数是integer，会在映射中查找，如果是一个WSGI 应用，会在proxy异常中抛出
+    
+    剩余参数会向exception构造器抛出
+    """
+    def __init__(
+        self,
+        mapping: dict[int, type[HTTPException]] | None = None,
+        extra: dict[int, type[HTTPException]] | None = None,
+    ) -> None:
+        if mapping is None:
+            mapping = default_exceptions
+        self.mapping = dict(mapping)
+        if extra is not None:
+            self.mapping.update(extra)
+
+    def __call__(
+        self, code: int | SansIOResponse, *args: t.Any, **kwargs: t.Any
+    ) -> t.NoReturn:
+        from .sansio.response import Response
+
+        if isinstance(code, Response):
+            raise HTTPException(response=code)
+        
+        if code not in self.mapping:
+            raise LookupError(f"no exception for code {code!r}")
+        
+        raise self.mapping[code](*args, **kwargs)

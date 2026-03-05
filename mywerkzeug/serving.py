@@ -655,6 +655,7 @@ def make_server(
             ssl_context, 
             fd=fd
         )
+    
     return BaseWSGIServer(
         host, port, app, request_handler, passthrough_errors, ssl_context, fd=fd
     )

@@ -1,6 +1,12 @@
-
+from .cache_control import RequestCacheControl as RequestCacheControl
+from .cache_control import ResponseCacheControl as ResponseCacheControl
 from .etag import ETags as ETags
 from .headers import Headers as Headers
 from .headers import EnvironHeaders as EnvironHeaders
 from .range import IfRange as IfRange
+from .structures import CallbackDict as CallbackDict
+from .structures import HeaderSet as HeaderSet
+from .structures import ImmutableDict as ImmutableDict
+from .structures import ImmutableMultiDict as ImmutableMultiDict
+from .structures import MultiDict as MultiDict
 from .structures import iter_multi_items as iter_multi_items

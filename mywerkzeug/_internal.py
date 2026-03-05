@@ -12,7 +12,14 @@ if t.TYPE_CHECKING:
     
 _logger: logging.Logger | None = None
 
+class _Missing:
+    def __repr__(self) -> str:
+        return "no value"
+    
+    def __reduce__(self) -> str:
+        return "_missing"
 
+_missing = _Missing()
 
 def _wsgi_decoding_dance(s: str) -> str:
     return s.encode("latin1").decode(errors="replace")
@@ -84,3 +91,25 @@ def _dt_as_utc(dt: datetime | None) -> datetime | None:
         return dt.astimezone(timezone.utc)
     
     return dt
+
+_TAccessorValue = t.TypeVar("_TAccessorValue")
+
+class _DictAccessorProperty(t.Generic[_TAccessorValue]):
+    """`environ_propertry`和`header_property`的基类"""
+
+    def __init__(
+        self,
+        name: str,
+        default: _TAccessorValue | None = None,
+        load_func: t.Callable[[str], _TAccessorValue] | None = None,
+        dump_func: t.Callable[[_TAccessorValue], str] | None = None,
+        read_only: bool | None = None,
+        doc: str | None = None,
+    ) -> None:
+        self.name = name
+        self.default = default
+        self.load_func = load_func
+        self.dump_func = dump_func
+        if read_only is not None:
+            self.read_only = read_only
+        self.__doc__ = doc
