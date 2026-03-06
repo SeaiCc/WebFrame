@@ -662,7 +662,7 @@ class Flask(App):
                     response = self.ensure_sync(func)(response)
         
         if not self.session_interface.is_null_session(response):
-            self.session_interface.save_session(self, request, response)
+            self.session_interface.save_session(self, ctx.session, response)
         
         return response
 
